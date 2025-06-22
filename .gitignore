@@ -1,0 +1,30 @@
+# 🤖 Python & 가상환경
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.sqlite3
+
+.env
+.envrc
+.venv/
+venv/
+env/
+ENV/
+
+# 📦 빌드/배포
+build/
+dist/
+*.egg-info/
+
+# ✅ 테스트/커버리지
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+
+# 🛠 IDE (PyCharm / IntelliJ)
+.idea/
+
+# 만약 특정 설정만 공유하고 싶다면 아래처럼 추가
+# !.idea/*.iml
