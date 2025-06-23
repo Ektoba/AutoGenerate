@@ -1,84 +1,72 @@
-# ConfigManager.py
 import json
 import os
 import sys
-
 
 class ConfigManager:
     """
     config.json 파일을 로드하고 설정값을 제공하는 클래스입니다.
     """
-
-    def __init__(self, script_dir):  # path 대신 script_dir을 인자로 받음
-        self.script_dir = script_dir
-        self.config_path = os.path.join(self.script_dir, "config.json")
+    def __init__(self):
+        # exe 파일 위치 기준
+        self.base_dir = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
+        self.config_path = os.path.join(self.base_dir, "config.json")
         self.config = self._load_config()
-        self._set_derived_paths()
+        self.project_root = os.path.abspath(
+            os.path.join(self.base_dir, self.config.get("ProjectRootPath", "."))
+        )
 
     def _load_config(self):
-        """config.json 파일을 로드합니다."""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 config_data = json.load(f)
                 print(f"[INFO] 설정 파일 로드 성공: {self.config_path}")
-                sys.stdout.flush()  # 즉시 출력
                 return config_data
         except FileNotFoundError:
-            print(f"[ERROR] 설정 파일 (config.json)을 찾을 수 없습니다: {self.config_path}")
-            sys.stdout.flush()
+            print(f"[ERROR] config.json 파일이 {self.config_path}에 없습니다. 반드시 exe와 같은 폴더에 있어야 합니다.")
+            self._crash_log("config.json 파일 없음", self.config_path)
             sys.exit(1)
-        except json.JSONDecodeError:
-            print(f"[ERROR] config.json 파일 형식이 올바르지 않습니다. 파싱 실패.")
-            sys.stdout.flush()
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] config.json 형식 오류: {e}")
+            self._crash_log(f"config.json 파싱 오류: {e}", self.config_path)
             sys.exit(1)
 
-    def _set_derived_paths(self):
-        """
-        로드된 config를 바탕으로 파생 경로들을 설정하고 정규화합니다.
-        모든 경로는 절대 경로, 소문자, 슬래시(/) 구분자로 통일합니다.
-        """
-        # PROJECT_ROOT_PATH (ConfigManager에서 계산)
-        self.project_root_path = os.path.abspath(
-            os.path.join(self.script_dir, self.config.get("ProjectRootPath", "..")))
-
-        # MainVcxprojPath 및 MainVcxprojFiltersPath
-        self.main_vcxproj_path_raw = self.config.get("MainVcxprojPath", "")
-        self.main_vcxproj_filters_path_raw = self.config.get("MainVcxprojFiltersPath", "")
-
-        # 정규화된 경로
-        self.main_vcxproj_path_normalized = os.path.abspath(
-            self.main_vcxproj_path_raw).lower() if self.main_vcxproj_path_raw else ""
-        self.main_vcxproj_filters_path_normalized = os.path.abspath(
-            self.main_vcxproj_filters_path_raw).lower() if self.main_vcxproj_filters_path_raw else ""
-
-        # Watchdog이 감시할 폴더 목록
-        self.watch_folders_for_observer = set()
-        if self.main_vcxproj_path_raw and os.path.exists(self.main_vcxproj_path_raw):
-            self.watch_folders_for_observer.add(os.path.dirname(self.main_vcxproj_path_raw))
-        if self.main_vcxproj_filters_path_raw and os.path.exists(self.main_vcxproj_filters_path_raw):
-            self.watch_folders_for_observer.add(os.path.dirname(self.main_vcxproj_filters_path_raw))
-
-        if not self.watch_folders_for_observer:
-            print(f"[ERROR] config.json에 유효한 .vcxproj 또는 .vcxproj.filters 경로가 없습니다. 감시할 대상 없음.")
-            print(f"UpdateConfig.ps1을 실행하여 config.json을 초기화하거나 관련 경로를 수동으로 설정해주세요.")
-            sys.stdout.flush()
-            sys.exit(1)
+    def _crash_log(self, msg, path):
+        try:
+            with open(os.path.join(self.base_dir, "zzz_crashlog.txt"), "a", encoding="utf-8") as f:
+                f.write(f"{msg}: {path}\n")
+        except Exception:
+            pass
 
     def get_setting(self, key, default=None):
-        """지정된 설정 키의 값을 반환합니다."""
         return self.config.get(key, default)
 
-    def get_project_root_path(self):
-        return self.project_root_path
+    def get_abs_path(self, relpath):
+        """
+        ProjectRootPath 기준으로 relpath를 절대경로로 변환
+        """
+        return os.path.abspath(os.path.join(self.project_root, relpath))
 
-    def get_main_vcxproj_paths(self):
-        """원본 메인 .vcxproj 및 .filters 경로를 반환합니다."""
-        return self.main_vcxproj_path_raw, self.main_vcxproj_filters_path_raw
+    def get_abs_watch_paths(self):
+        """
+        WatchPaths에 들어있는 상대경로들을 ProjectRootPath 기준 절대경로 리스트로 반환
+        """
+        watch_paths = self.config.get("WatchPaths", [])
+        abs_paths = []
+        for relpath in watch_paths:
+            abspath = self.get_abs_path(relpath)
+            if os.path.isdir(abspath):
+                abs_paths.append(abspath)
+        return abs_paths
 
-    def get_normalized_main_vcxproj_paths(self):
-        """정규화된 메인 .vcxproj 및 .filters 경로를 반환합니다."""
-        return self.main_vcxproj_path_normalized, self.main_vcxproj_filters_path_normalized
+    # (선택) 주요 경로도 쉽게 가져오게 헬퍼 메서드 추가
+    def get_abs_main_vcxproj(self):
+        return self.get_abs_path(self.config.get("MainVcxprojPath", ""))
 
-    def get_watch_folders_for_observer(self):
-        """Watchdog Observer가 감시할 실제 폴더 경로 목록을 반환합니다."""
-        return list(self.watch_folders_for_observer)
+    def get_abs_main_vcxproj_filters(self):
+        return self.get_abs_path(self.config.get("MainVcxprojFiltersPath", ""))
+
+    def get_abs_backup_dir(self):
+        return self.get_abs_path(self.config.get("BackupDir", "backup"))
+
+    def get_abs_logfile(self):
+        return self.get_abs_path(self.config.get("LogFile", "logs/watcher.log"))
