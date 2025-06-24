@@ -58,3 +58,16 @@ class FileDeleter:
             else:
                 print(f"[FileDeleter] {msg}")
             return False
+
+    def delete_folder(self, dir_path):
+        """ 폴더를 휴지통으로 보냅니다. """
+        try:
+            # send2trash는 파일과 폴더 모두 처리 가능!
+            send2trash.send2trash(dir_path)
+            if self.logger:
+                self.logger.info(f"폴더 삭제 완료 (휴지통으로 이동): {dir_path}")
+            return True
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"폴더 삭제 오류: {dir_path} - {e}")
+            return False
