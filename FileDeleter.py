@@ -1,5 +1,5 @@
 import os
-
+import send2trash
 class FileDeleter:
     def __init__(self, backup_manager=None, logger=None, dry_run=False):
         self.backup_manager = backup_manager
@@ -33,12 +33,23 @@ class FileDeleter:
                     print(f"[FileDeleter] {msg}")
                 return False
         try:
-            os.remove(file_path)
-            msg = f"삭제 완료: {file_path}"
+            #os.remove(file_path)
+            send2trash.send2trash(file_path)  # 👈 2. 휴지통으로 보내기!
+            msg = f"삭제 완료(드럼통으로 이동): {file_path}"
             if self.logger:
                 self.logger.info(msg)
-            else:
-                print(f"[FileDeleter] {msg}")
+
+            # 2. 파일이 있던 폴더를 확인한다
+            dir_path = os.path.dirname(file_path)
+
+            # 3. 폴더가 비어있는지 확인한다 (파일, 폴더 모두 없는지)
+            if not os.listdir(dir_path):
+                if self.logger:
+                    self.logger.info(f"빈 폴더 발견! 함께 정리합니다 (휴지통으로 이동): {dir_path}")
+                # 4. 비어있으면 폴더도 휴지통으로 보낸다!
+                send2trash.send2trash(dir_path)
+            # ✨✨✨ 여기까지! ✨✨✨
+
             return True
         except Exception as e:
             msg = f"파일 삭제 오류: {file_path} - {e}"

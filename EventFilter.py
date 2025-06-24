@@ -1,33 +1,70 @@
 import os
 import time
 from collections import deque
+import sys
+
 
 class EventFilter:
-    def __init__(self, interesting_paths):
-        # 감시대상 전체 절대경로 (소문자)
-        self.interesting_paths = set(os.path.abspath(p).lower() for p in interesting_paths)
+    def __init__(self, config_manager):  # config_manager 인스턴스 받음
+        self.config_manager = config_manager
+        self.normalized_main_vcxproj_path, self.normalized_main_vcxproj_filters_path = self.config_manager.get_normalized_main_vcxproj_paths()
+        self.ignored_name_patterns = self.config_manager.get_setting("IgnoredNamePatterns",
+                                                                     ['.obj', '.pdb', '.tmp', '.user', '.log', '.ilk',
+                                                                      '.ipch', '.sdf', '.vs', '.VC.opendb', '.suo',
+                                                                      '.ncb', '.bak', '~', '.swp', '.lock',
+                                                                      '.autocover', '.asset'])
+        self.ignored_dirs = [d.lower() for d in self.config_manager.get_setting("IgnoredDirs",
+                                                                                ['/intermediate/', '/saved/',
+                                                                                 '/binaries/', '/build/',
+                                                                                 '/deriveddata/', '/staging/',
+                                                                                 '/unrealbuildtool/',
+                                                                                 # --- 아래 두 줄 추가 ---
+                                                                                 '/logs/',     # 로그 폴더 무시
+                                                                                 '/backup/'    # 백업 폴더 무시
+                                                                                 # --- 추가 끝 ---
+                                                                                 ])]
+
         self.recent_events = deque(maxlen=32)
+        self.valid_event_types = ['modified', 'created', 'deleted', 'moved', 'renamed']
+
+    def is_valid_event_type(self, event_type):
+        """이벤트 타입이 유효한지 확인합니다."""
+        return event_type in self.valid_event_types
 
     def is_interesting(self, event):
-        # 지정 경로에 포함된 파일만 트리거
-        return os.path.abspath(event.src_path).lower() in self.interesting_paths
+        """
+        이벤트가 메인 .vcxproj 또는 .vcxproj.filters 파일에 대한 것인지 확인합니다.
+        """
+        normalized_event_src_path = os.path.abspath(event.src_path).lower()
+        return normalized_event_src_path == self.normalized_main_vcxproj_path or \
+            normalized_event_src_path == self.normalized_main_vcxproj_filters_path
 
-    def is_duplicate(self, event, event_type):
+    def is_duplicate(self, event):  # event_type 인자 제거, event 객체에서 추출
+        """
+        짧은 시간 내에 발생하는 중복 이벤트를 필터링합니다.
+        """
         now = time.time()
-        key = (event_type, event.src_path)
+        key = (event.event_type, event.src_path)
         for ts, k in list(self.recent_events):
-            if now - ts > 0.5:
+            if now - ts > 0.1:  # 100ms
                 self.recent_events.popleft()
             elif k == key:
                 return True
         self.recent_events.append((now, key))
         return False
 
-    def ignore_by_pattern(self, event, ignored_names, ignored_dirs):
-        file_name = os.path.basename(event.src_path).lower()
-        if any(pattern in file_name for pattern in ignored_names):
+    def ignore_by_pattern(self, event):  # event, ignored_names, ignored_dirs 인자 제거
+        """
+        이벤트가 무시할 패턴(파일 이름/디렉토리)에 해당하는지 확인합니다.
+        """
+        # 파일 이름 패턴 검사
+        event_file_name_lower = os.path.basename(event.src_path).lower()
+        if any(p in event_file_name_lower for p in self.ignored_name_patterns):
             return True
-        norm_path = os.path.abspath(event.src_path).lower().replace(os.sep, '/')
-        if any(d.lower() in norm_path for d in ignored_dirs):
+
+        # 디렉토리 패턴 검사
+        normalized_path_for_ignored = os.path.abspath(event.src_path).lower().replace(os.sep, '/')
+        if any(d in normalized_path_for_ignored for d in self.ignored_dirs):
             return True
+
         return False
