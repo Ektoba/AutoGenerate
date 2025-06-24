@@ -11,6 +11,7 @@ __pycache__/
 venv/
 env/
 ENV/
+dist/
 
 # 📦 빌드/배포
 build/
@@ -28,3 +29,13 @@ htmlcov/
 
 # 만약 특정 설정만 공유하고 싶다면 아래처럼 추가
 # !.idea/*.iml
+/auto_generate_project.py
+/GenerateProjectFile.ps1
+/main.spec
+/StartProjectWatcher.bat
+/UpdateConfig.ps1
+/.gitignore
+/UnrealProjWatcher.spec
+/UnrealWatch.spec
+/UnrealWatcher.exe.spec
+/zzz_crashlog.txt
