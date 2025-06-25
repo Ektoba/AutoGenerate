@@ -134,3 +134,34 @@ class ProjectFileManager:
         self._save_cache(self.cached_file_list)
 
         return newly_unreferenced
+
+    def check_for_offline_changes(self):
+        """
+        프로그램 시작 시, 또는 주기적으로 호출되어 꺼져있을 때의 변경 사항을 찾아냅니다.
+        """
+        self.logger.info("오프라인 변경 사항 확인 중...")
+
+        # 디스크에 저장된 캐시(과거)와 현재 .vcxproj 파일(현재)을 비교
+        cached_files = set(self._load_cache())
+        current_files = set(self.get_cpp_files_from_vcxproj())
+
+        # 캐시에는 있는데 현재 프로젝트에는 없는 파일들 -> 꺼져있을 때 삭제된 파일
+        deleted_while_offline = list(cached_files - current_files)
+        # 현재 프로젝트에는 있는데 캐시에는 없는 파일들 -> 꺼져있을 때 추가된 파일
+        added_while_offline = list(current_files - cached_files)
+
+        if deleted_while_offline:
+            self.logger.warning(f"Watcher가 꺼진 사이 삭제된 것으로 보이는 파일 {len(deleted_while_offline)}개를 발견했습니다.")
+            # 여기에 사용자에게 물어보고 삭제하는 로직을 추가할 수 있어!
+
+        if added_while_offline:
+            self.logger.warning(
+                f"Watcher가 꺼진 사이 추가된 것으로 보이는 파일 {len(added_while_offline)}개를 발견했습니다. 프로젝트 파일 갱신이 필요할 수 있습니다.")
+
+        # 두 목록이 일치하지 않으면 동기화가 필요하다는 의미
+        if deleted_while_offline or added_while_offline:
+            self.logger.info("프로젝트와 캐시가 동기화되지 않았습니다. 갱신을 추천합니다.")
+            return False  # 동기화 안됨
+
+        self.logger.info("프로젝트와 캐시가 동기화된 상태입니다.")
+        return True  # 동기화 상태 양호

@@ -14,7 +14,7 @@ import BackupManager
 import FileDeleter
 import DeleteReport
 import EventFilter
-
+import threading
 
 def main():
     # script_dir 계산 (ConfigManager에서 더 이상 직접 사용하지 않지만, 다른 곳에서 필요할 수 있으므로 유지)
@@ -83,6 +83,28 @@ def main():
             observer.schedule(handler, path=folder, recursive=True)
             logger.info(f"Watchdog 감시 시작: {folder} (재귀 포함)")
 
+    # main 함수 맨 아래, observer.start() 위에 추가
+    def start_periodic_patrol(interval_minutes, pfm, handler):
+        def patrol():
+            logger.info(f"{interval_minutes}분 주기 자동 순찰을 시작합니다.")
+            is_in_sync = pfm.check_for_offline_changes()
+
+            if not is_in_sync:
+                logger.warning("프로젝트에 변경 사항이 감지되어, 강제로 갱신 스크립트를 실행합니다.")
+                handler.run_update_script()  # 동기화가 안 맞으면 갱신 스크립트 실행!
+
+            # 다음 순찰 예약
+            threading.Timer(interval_minutes * 60, patrol).start()
+
+        # 첫 순찰 예약
+        threading.Timer(interval_minutes * 60, patrol).start()
+        logger.info(f"{interval_minutes}분 후 첫 자동 순찰이 시작됩니다...")
+
+        # main 함수 안, observer.start() 바로 직전에 아래 코드 추가
+        patrol_interval = config_manager.get_setting("PatrolIntervalMinutes", 30)
+        if patrol_interval > 0:
+            start_periodic_patrol(patrol_interval, project_file_manager, handler)
+
     observer.start()
     logger.info(
         f"폴더 변경 감시 중... (기본: {config_manager.get_setting('DebounceTimeMs', 300000) / 1000.0}초 / 수정: {config_manager.get_setting('DebounceTimeForModifiedMs', 100) / 1000.0}초 / 기타: {config_manager.get_setting('DebounceTimeForOtherEventsMs', 100) / 1000.0}초 지연 적용) (종료: Ctrl+C)")
@@ -98,7 +120,5 @@ def main():
     finally:
         observer.join()
         logger.info("폴더 감시가 종료되었습니다.")
-
-
 if __name__ == "__main__":
     main()

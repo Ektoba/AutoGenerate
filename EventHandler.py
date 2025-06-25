@@ -24,7 +24,7 @@ class ChangeHandler(FileSystemEventHandler):
 
         self.main_vcxproj_path_raw, self.main_vcxproj_filters_path_raw = self.config_manager.get_main_vcxproj_paths()
         self.normalized_main_vcxproj_path, self.normalized_main_vcxproj_filters_path = self.config_manager.get_normalized_main_vcxproj_paths()
-        self.debounce_time_for_other_events_ms = self.config_manager.get_setting("DebounceTimeForOtherEventsMs", 100)
+        self.debounce_time_for_other_events_ms = self.config_manager.get_setting("DebounceTimeMs", 1500)
         self.run_script_name = self.config_manager.get_setting("GenerateScript", "GenerateProjectFile.ps1")
         self.script_dir = self.config_manager.base_dir
 
