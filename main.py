@@ -52,7 +52,7 @@ def main():
         logger=logger,
         dry_run=config_manager.get_setting("DryRun", False)
     )
-    delete_report = DeleteReport.DeleteReport(logger=logger)  # logger 인자 추가!
+    #delete_report = DeleteReport.DeleteReport(logger=logger)  # logger 인자 추가!
 
     project_file_manager = ProjectFileManager.ProjectFileManager(
         config_manager=config_manager,
@@ -66,7 +66,7 @@ def main():
         logger=logger,
         project_file_manager=project_file_manager,
         file_deleter=file_deleter,
-        delete_report=delete_report,
+        #delete_report=delete_report,
         event_filter=event_filter
     )
 
