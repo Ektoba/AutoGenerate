@@ -1,3 +1,4 @@
+# ConfigManager.py
 import json
 import os
 import sys
@@ -6,9 +7,8 @@ import logging
 
 class ConfigManager:
     def __init__(self):
-        # --- 여기서부터 try 블록으로 전체 초기화 과정을 감싸주자! ---
         try:
-            self.logger = None  # 로거 변수는 여기서 선언
+            self.logger = None
             self.is_pyinstaller_build = getattr(sys, 'frozen', False)
 
             if self.is_pyinstaller_build:
@@ -17,13 +17,12 @@ class ConfigManager:
                 self.base_dir = os.path.dirname(os.path.abspath(__file__))
 
             self.config_path = os.path.join(self.base_dir, "config.json")
-            self.config = self._load_config()  # 설정 파일 로드 시도
+            self.config = self._load_config()
 
             self.project_root = os.path.abspath(
                 os.path.join(self.base_dir, self.config.get("ProjectRootPath", "."))
             )
 
-        # --- 발생할 수 있는 오류들을 종류별로 착착 잡아주는 except 블록! ---
         except FileNotFoundError:
             print(f"[CRITICAL ERROR] 설정 파일(config.json)을 찾을 수 없습니다: {self.config_path}")
             print("[CRITICAL ERROR] 'config.json' 파일이 실행 파일과 같은 폴더에 있는지 확인해주세요.")
@@ -46,7 +45,6 @@ class ConfigManager:
 
     def _load_config(self):
         """ config.json 파일을 읽어오는 내부 함수 """
-        # 이 함수는 self.logger가 설정되기 전에 호출되므로 print 사용
         with open(self.config_path, 'r', encoding='utf-8') as f:
             config_data = json.load(f)
             print(f"[INFO] 설정 파일 로드 성공: {self.config_path}")
@@ -81,7 +79,7 @@ class ConfigManager:
 
     def get_abs_watch_paths(self):
         """ WatchPaths에 들어있는 상대경로들을 절대경로 리스트로 반환 """
-        abs_paths = []  # ✨ 여기에 리스트 선언!
+        abs_paths = []
         watch_paths = self.get_setting("WatchPaths", [])
 
         if self.logger: self.logger.debug("--- 감시 폴더 목록 계산 시작 ---")
@@ -99,9 +97,7 @@ class ConfigManager:
         if os.path.isdir(main_vcxproj_dir) and main_vcxproj_dir not in abs_paths:
             abs_paths.append(main_vcxproj_dir)
 
-        # .filters 파일은 보통 .vcxproj와 같은 디렉토리에 있으므로 중복 확인 불필요
-
-        final_watch_folders = list(set(abs_paths))  # 중복 제거
+        final_watch_folders = list(set(abs_paths))
         if self.logger:
             self.logger.debug(f"최종 감시 폴더: {final_watch_folders}")
             self.logger.debug("--- 감시 폴더 목록 계산 종료 ---")
@@ -109,18 +105,12 @@ class ConfigManager:
         return final_watch_folders
 
     def get_abs_main_vcxproj(self):
+        """ 메인 .vcxproj 파일의 절대 경로를 반환합니다. """
         return self.get_abs_path(self.config.get("MainVcxprojPath", ""))
 
     def get_abs_main_vcxproj_filters(self):
+        """ 메인 .vcxproj.filters 파일의 절대 경로를 반환합니다. """
         return self.get_abs_path(self.config.get("MainVcxprojFiltersPath", ""))
-
-    def get_abs_backup_dir(self):
-        # BackupDir은 ProjectRootPath 기준이 아닌, 실행 파일 기준(base_dir)이 더 직관적일 수 있음
-        # 만약 ProjectRootPath 기준으로 하고 싶다면 get_abs_path 사용
-        return self.get_abs_path_from_base_dir(self.config.get("BackupDir", "backup"))
-
-    def get_abs_logfile(self):
-        return self.get_abs_path_from_base_dir(self.config.get("LogPath", "Logs/Watcher.log"))
 
     def get_normalized_main_vcxproj_paths(self):
         """ 메인 .vcxproj 및 .vcxproj.filters 파일의 절대 경로를 정규화하여 반환 """
@@ -137,3 +127,12 @@ class ConfigManager:
         main_vcxproj_path = self.get_abs_main_vcxproj()
         main_vcxproj_filters_path = self.get_abs_main_vcxproj_filters()
         return main_vcxproj_path, main_vcxproj_filters_path
+
+    def get_abs_backup_dir(self):
+        return self.get_abs_path_from_base_dir(self.config.get("BackupDir", "backup"))
+
+    def get_abs_logfile(self):
+        return self.get_abs_path_from_base_dir(self.config.get("LogPath", "Logs/Watcher.log"))
+
+    def get_abs_uproject_path(self):
+        return os.path.join(self.project_root, self.get_setting("MainUprojectPath", ""))

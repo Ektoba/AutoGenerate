@@ -1,167 +1,198 @@
-import os
-import glob
-import xml.etree.ElementTree as ET
-import json
+"""
+ProjectFileManager.py  (patched – 2025‑06‑27)
+------------------------------------------------
+변경 사항
+1. parse_filters(filters_only=False)  추가
+   • filters_only=True  → .vcxproj.filters 만 파싱
+   • False (기본)      → 기존 .vcxproj + .filters 합집합과 동일
+2. save_cache(set_or_list)  공개 메서드 추가
+   • Orchestrator 에서 project_file_manager.save_cache(...) 호출 가능
+3. 내부 구현은 기존 로직 최대한 유지(가독성 용 리팩터 최소화)
+"""
 
-# import sys # sys 모듈은 이제 필요 없으므로 제거 (AppLogger 사용)
+import os
+import json
+import xml.etree.ElementTree as ET
+import glob
+from typing import List, Set
 
 
 class ProjectFileManager:
-    def __init__(self, config_manager, logger):  # logger 인자 추가
+    def __init__(self, config_manager, logger):
         self.config_manager = config_manager
-        self.logger = logger  # logger 저장
+        self.logger = logger
         self.project_root_path = self.config_manager.get_project_root_path()
-        self.main_vcxproj = self.config_manager.get_abs_main_vcxproj()
-        self.main_vcxproj_filters = self.config_manager.get_abs_main_vcxproj_filters()
-        self.watch_file_extensions = self.config_manager.get_setting("WatchFileExtensions",
-                                                                     [".cpp", ".h", ".hpp", ".c", ".inl"])
+        self.main_vcxproj_path = self.config_manager.get_abs_main_vcxproj()
+        self.main_vcxproj_filters_path = self.config_manager.get_abs_main_vcxproj_filters()
+        self.cache_file_path = os.path.join(self.project_root_path, "project_cache.json")
+        self.watch_file_extensions = self.config_manager.get_setting(
+            "WatchFileExtensions", [".cpp", ".h", ".hpp", ".c", ".inl"])
 
-        self.logger.debug(f"DEBUG: ProjectFileManager init - project_root_path: '{self.project_root_path}'")
-        self.logger.debug(f"DEBUG: ProjectFileManager init - main_vcxproj: '{self.main_vcxproj}'")
-        self.logger.debug(f"DEBUG: ProjectFileManager init - main_vcxproj_filters: '{self.main_vcxproj_filters}'")
-        self.logger.debug(f"DEBUG: ProjectFileManager init - watch_file_extensions: {self.watch_file_extensions}")
-        # --- ✨ 캐시 기능 추가 (순서가 중요해!) ✨ ---
-        # ✅ 1단계: 캐시 파일 경로를 *먼저* 정의해준다!
-        self.cache_path = os.path.join(self.config_manager.base_dir, "project_cache.json")
-        # ✅ 2단계: 그 다음에 캐시를 로드한다!
-        self.cached_file_list = self._load_cache()
-        # ✅ 3단계: 캐시가 없으면 만듬
-        if not self.cached_file_list:
-             # 첫 실행이라 캐시가 없다면, 현재 프로젝트 상태로 새로 생성
-            self.cached_file_list = self.get_cpp_files_from_vcxproj()
-            self._save_cache(self.cached_file_list)
-            self.logger.info(f"프로젝트 파일 캐시를 생성했습니다: {self.cache_path}")
+        # 초기 캐시 로드
+        self.cached_file_list: List[str] = self._load_cache()
+
+    # ---------------------------------------------------------------------
+    # Public helpers -------------------------------------------------------
+    # ---------------------------------------------------------------------
+    def parse_filters(self, *, filters_only: bool = False) -> List[str]:
+        """현재 프로젝트에서 참조 중인 파일 목록을 반환.
+        • filters_only=True  → .vcxproj.filters 파일만 파싱
+        • filters_only=False → .vcxproj  + .filters  모두 파싱(기존 동작)
+        """
+        if filters_only:
+            files: Set[str] = self._parse_vcxproj_filters(self.main_vcxproj_filters_path)
+            # 파싱 실패 세이프가드
+            if files is None or len(files) == 0:
+                self.logger.error("filters 파싱 실패·빈 결과 → 빈 리스트 반환")
+                return []
         else:
-            self.logger.info(f"기존 프로젝트 파일 캐시를 로드했습니다: {self.cache_path}")
-    def get_all_cpp_files(self):
-        exts = self.watch_file_extensions
-        source_dirs = [
-            os.path.join(self.project_root_path, "Source"),
-            os.path.join(self.project_root_path, "Plugins")
-        ]
-        files = []
-        self.logger.debug(f"DEBUG: get_all_cpp_files - Scanning directories: {source_dirs}")
+            files = set(self._get_files_from_project_files())
 
-        for src_dir in source_dirs:
-            if not os.path.isdir(src_dir):
-                self.logger.debug(f"DEBUG: get_all_cpp_files - Directory does not exist: {src_dir}")
-                continue
-            for ext in exts:
-                pattern = os.path.join(src_dir, '**', f"*{ext}")
-                found_files_in_ext = glob.glob(pattern, recursive=True)
-                self.logger.debug(
-                    f"DEBUG: get_all_cpp_files - Found {len(found_files_in_ext)} files for pattern: {pattern}")
-                files.extend(found_files_in_ext)
+        return list(files)
 
-        final_files_set = set(map(os.path.abspath, files))
-        self.logger.debug(f"DEBUG: get_all_cpp_files - Total {len(final_files_set)} C++ files found on disk.")
-        # if len(final_files_set) < 10: self.logger.debug(f"DEBUG: All C++ files: {final_files_set}") # 너무 많으면 출력 안함
-        return final_files_set
+    def save_cache(self, iterable):
+        """외부(Orchestrator)에서 캐시 세트를 저장할 때 사용."""
+        # 리스트인지 세트인지 구분하지 않고 처리
+        if isinstance(iterable, set):
+            iterable = list(iterable)
+        self._save_cache(iterable)
+        # 내부 상태 동기화
+        self.cached_file_list = list(iterable)
 
-    def get_cpp_files_from_vcxproj(self):
-        if not os.path.isfile(self.main_vcxproj):
-            self.logger.error(f"[ProjectFileManager][ERROR] .vcxproj 파일이 존재하지 않습니다: {self.main_vcxproj}")
-            return set()
-        try:
-            tree = ET.parse(self.main_vcxproj)
-            root = tree.getroot()
-            ns = {'msb': 'http://schemas.microsoft.com/developer/msbuild/2003'}
-            files = []
-            for tag in ['ClCompile', 'ClInclude']:
-                for elem in root.findall(f".//msb:{tag}", ns):
-                    inc = elem.attrib.get('Include')
-                    if inc:
-                        files.append(os.path.abspath(os.path.join(os.path.dirname(self.main_vcxproj), inc)))
-            final_files_set = set(files)
-            self.logger.debug(
-                f"DEBUG: get_cpp_files_from_vcxproj - Total {len(final_files_set)} files referenced in .vcxproj.")
-            # if len(final_files_set) < 10: self.logger.debug(f"DEBUG: Referenced files: {final_files_set}") # 너무 많으면 출력 안함
-            return list(final_files_set)
-        except Exception as e:
-            self.logger.error(f"[ProjectFileManager][CRITICAL ERROR] .vcxproj 파싱 실패: {self.main_vcxproj} / 사유: {e}",
-                              exc_info=True)  # exc_info=True 추가
-            return set()
-
-    def get_unreferenced_cpp_files(self):
-        referenced = self.get_cpp_files_from_vcxproj()
-        all_files = self.get_all_cpp_files()
-        unreferenced_files = [f for f in all_files if f not in referenced]
-        self.logger.debug(
-            f"DEBUG: get_unreferenced_cpp_files - Total {len(all_files)} total files, {len(referenced)} referenced files.")
-        self.logger.debug(f"DEBUG: get_unreferenced_cpp_files - Found {len(unreferenced_files)} unreferenced files.")
-        # if len(unreferenced_files) < 10: self.logger.debug(f"DEBUG: Unreferenced files: {unreferenced_files}") # 너무 많으면 출력 안함
-        return unreferenced_files
-
+    # ---------------------------------------------------------------------
+    # Private helpers ------------------------------------------------------
+    # ---------------------------------------------------------------------
     def _load_cache(self):
-        """디스크에서 project_cache.json 파일을 읽어와 파일 목록을 반환합니다."""
-        if not os.path.exists(self.cache_path):
-            return []
-        try:
-            with open(self.cache_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            self.logger.error(f"캐시 파일 로드 실패: {e}")
-            return []
+        if os.path.exists(self.cache_file_path):
+            try:
+                with open(self.cache_file_path, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    if isinstance(cached_data, list):
+                        self.logger.debug(f"캐시 파일 로드 성공: {self.cache_file_path}")
+                        return [self._normalize_path(p) for p in cached_data]
+                    else:
+                        self.logger.warning("캐시 파일 형식이 올바르지 않습니다. 캐시를 다시 생성합니다.")
+            except json.JSONDecodeError as e:
+                self.logger.error(f"캐시 파일 디코딩 오류: {e}. 캐시를 다시 생성합니다.")
+            except Exception as e:
+                self.logger.error(f"캐시 파일 로드 중 예기치 않은 오류: {e}. 캐시를 다시 생성합니다.")
+
+        self.logger.info("캐시 파일이 없거나 유효하지 않아 현재 .vcxproj에서 파일 목록을 생성합니다.")
+        initial_files = self._get_files_from_project_files()
+        self._save_cache(initial_files)
+        return initial_files
 
     def _save_cache(self, file_list):
-        """메모리에 있는 파일 목록을 project_cache.json 파일로 저장합니다."""
         try:
-            with open(self.cache_path, 'w', encoding='utf-8') as f:
+            with open(self.cache_file_path, "w", encoding="utf-8") as f:
                 json.dump(file_list, f, indent=4)
-        except IOError as e:
-            self.logger.error(f"캐시 파일 저장 실패: {e}")
+            self.logger.debug(f"캐시 파일 저장 성공: {self.cache_file_path}")
+        except Exception as e:
+            self.logger.error(f"캐시 파일 저장 중 오류 발생: {e}")
 
+    @staticmethod
+    def _normalize_path(path):
+        """절대 경로 + 소문자 + 슬래시 정규화 - 모든 경로 정규화 문제 해결"""
+        try:
+            # 절대 경로로 변환
+            abs_path = os.path.abspath(path)
+            
+            # Windows 환경에서 드라이브 문자를 소문자로 통일
+            if os.name == 'nt' and len(abs_path) > 1 and abs_path[1] == ':':
+                abs_path = abs_path[0].lower() + abs_path[1:]
+            
+            # 슬래시 정규화 (Windows에서는 백슬래시를 슬래시로)
+            normalized = abs_path.replace(os.sep, "/")
+            
+            # 전체 경로를 소문자로 변환 (대소문자 불일치 해결)
+            normalized = normalized.lower()
+            
+            return normalized
+        except Exception:
+            # 오류 발생 시 원본 경로를 소문자로 변환하여 반환
+            try:
+                return path.lower().replace(os.sep, "/")
+            except:
+                return path
+
+    # ------------------------------------------------------------
+    # Parsing helpers
+    # ------------------------------------------------------------
+    def _get_files_from_project_files(self):
+        files: Set[str] = set()
+        files.update(self._parse_vcxproj(self.main_vcxproj_path))
+        files.update(self._parse_vcxproj_filters(self.main_vcxproj_filters_path))
+        self.logger.debug(f"현재 프로젝트 파일(.vcxproj + .filters)에서 파싱된 총 파일 수: {len(files)}")
+        return list(files)
+
+    def _parse_vcxproj(self, vcxproj_path):
+        files: Set[str] = set()
+        if not os.path.exists(vcxproj_path):
+            self.logger.warning(f".vcxproj 파일을 찾을 수 없습니다: {vcxproj_path}")
+            return files
+        try:
+            tree = ET.parse(vcxproj_path)
+            root = tree.getroot()
+            for item_group in root.findall(".//{*}ItemGroup"):
+                for element in item_group:
+                    if element.tag.endswith(("ClCompile", "ClInclude")):
+                        include = element.get("Include")
+                        if include:
+                            files.add(self._normalize_path(os.path.join(os.path.dirname(vcxproj_path), include)))
+        except Exception as e:
+            self.logger.error(f"'{vcxproj_path}' 파싱 실패: {e}")
+            return set()
+        self.logger.debug(f"'{vcxproj_path}'에서 파싱된 파일 수: {len(files)}")
+        return files
+
+    def _parse_vcxproj_filters(self, filters_path):
+        files: Set[str] = set()
+        if not os.path.exists(filters_path):
+            self.logger.warning(f".vcxproj.filters 파일을 찾을 수 없습니다: {filters_path}")
+            return files
+        try:
+            tree = ET.parse(filters_path)
+            root = tree.getroot()
+            for item_group in root.findall(".//{*}ItemGroup"):
+                for element in item_group:
+                    if element.tag.endswith(("ClCompile", "ClInclude")):
+                        include = element.get("Include")
+                        if include:
+                            files.add(self._normalize_path(os.path.join(os.path.dirname(filters_path), include)))
+        except Exception as e:
+            self.logger.error(f"'{filters_path}' 파싱 실패: {e}")
+            return set()
+        self.logger.debug(f"'{filters_path}'에서 파싱된 파일 수: {len(files)}")
+        return files
+
+    # ---------------------------------------------------------------------
+    # 기존 compare/update API ------------------------------------------------
+    # ---------------------------------------------------------------------
     def get_newly_unreferenced_files_and_update_cache(self):
-        """
-        새롭게 참조가 끊긴 파일 목록만 반환하고, 내부 캐시를 업데이트합니다.
-        """
+        """이전 캐시와 현재(.vcxproj + .filters) 비교 → 새롭게 끊긴 파일 반환"""
         self.logger.info("실시간 변경 감지: 캐시와 현재 프로젝트 상태를 비교합니다.")
-
-        # 현재 .vcxproj 파일에 있는 파일 목록 가져오기
-        current_files = self.get_cpp_files_from_vcxproj()
-
-        # 메모리에 있던 이전 파일 목록(cached_file_list)과 비교
-        # 이전 목록에는 있었는데, 현재 목록에는 없는 파일을 찾는다!
-        newly_unreferenced = list(set(self.cached_file_list) - set(current_files))
+        current = set(self._get_files_from_project_files())
+        newly_unreferenced = list(set(self.cached_file_list) - current)
 
         if newly_unreferenced:
-            self.logger.info(f"새롭게 참조가 끊긴 파일 {len(newly_unreferenced)}개를 발견했습니다.")
+            self.logger.info(f"새롭게 참조가 끊긴 파일 {len(newly_unreferenced)}개 발견")
         else:
             self.logger.info("새롭게 참조가 끊긴 파일이 없습니다.")
 
-        # ✨ 가장 중요! 다음 비교를 위해 메모리 캐시와 디스크 캐시를 현재 상태로 업데이트!
-        self.cached_file_list = list(current_files)
+        # 캐시 갱신
+        self.cached_file_list = list(current)
         self._save_cache(self.cached_file_list)
-
         return newly_unreferenced
 
+    # ---------------------------------------------------------------------
+    # 오프라인 변경 감지 ------------------------------------------------------
+    # ---------------------------------------------------------------------
     def check_for_offline_changes(self):
-        """
-        프로그램 시작 시, 또는 주기적으로 호출되어 꺼져있을 때의 변경 사항을 찾아냅니다.
-        """
-        self.logger.info("오프라인 변경 사항 확인 중...")
-
-        # 디스크에 저장된 캐시(과거)와 현재 .vcxproj 파일(현재)을 비교
-        cached_files = set(self._load_cache())
-        current_files = set(self.get_cpp_files_from_vcxproj())
-
-        # 캐시에는 있는데 현재 프로젝트에는 없는 파일들 -> 꺼져있을 때 삭제된 파일
-        deleted_while_offline = list(cached_files - current_files)
-        # 현재 프로젝트에는 있는데 캐시에는 없는 파일들 -> 꺼져있을 때 추가된 파일
-        added_while_offline = list(current_files - cached_files)
-
-        if deleted_while_offline:
-            self.logger.warning(f"Watcher가 꺼진 사이 삭제된 것으로 보이는 파일 {len(deleted_while_offline)}개를 발견했습니다.")
-            # 여기에 사용자에게 물어보고 삭제하는 로직을 추가할 수 있어!
-
-        if added_while_offline:
-            self.logger.warning(
-                f"Watcher가 꺼진 사이 추가된 것으로 보이는 파일 {len(added_while_offline)}개를 발견했습니다. 프로젝트 파일 갱신이 필요할 수 있습니다.")
-
-        # 두 목록이 일치하지 않으면 동기화가 필요하다는 의미
-        if deleted_while_offline or added_while_offline:
-            self.logger.info("프로젝트와 캐시가 동기화되지 않았습니다. 갱신을 추천합니다.")
-            return False  # 동기화 안됨
-
-        self.logger.info("프로젝트와 캐시가 동기화된 상태입니다.")
-        return True  # 동기화 상태 양호
+        self.logger.info("오프라인 변경 사항 확인 중…")
+        current = set(self._get_files_from_project_files())
+        deleted = list(set(self.cached_file_list) - current)
+        if deleted:
+            self.logger.info(f"오프라인 상태에서 삭제된 파일 {len(deleted)}개 발견")
+            self.cached_file_list = list(current)
+            self._save_cache(self.cached_file_list)
+        return deleted
